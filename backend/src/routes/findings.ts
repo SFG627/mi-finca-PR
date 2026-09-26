@@ -4,6 +4,7 @@ import { requireAuth } from '../middleware/auth'
 import { Errors } from '../lib/errors'
 import { requireFields, requireValidId, parseBody } from '../lib/validate'
 import { requireFarmRole } from '../lib/farmAccess'
+import { todayInAppTz } from '../lib/today'
 
 // ──────────────────────────────────────────────────────────────────────────
 // Scouting findings — pest/disease observations tied to a field, with the
@@ -66,10 +67,10 @@ const observationsInclude = {
   },
 }
 
+// The farm's calendar date at UTC midnight (lib/today.ts) — the anchor
+// @db.Date columns use.
 function todayUtc(): Date {
-  const d = new Date()
-  d.setUTCHours(0, 0, 0, 0)
-  return d
+  return todayInAppTz()
 }
 
 function requireIdArray(val: unknown, name: string) {

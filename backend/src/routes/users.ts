@@ -7,6 +7,7 @@ import { requireAuth } from '../middleware/auth'
 import { buildExport, restoreFromBackup, clearUserData, BACKUP_VERSION } from '../lib/backup'
 import { restoreBackupRequestSchema } from '../contracts/backupContract'
 import { Errors } from '../lib/errors'
+import { todayIsoInAppTz } from '../lib/today'
 
 // ──────────────────────────────────────────────────────────────────────────
 // Per-user preferences (issues #9/#14). Notification preferences mirror the
@@ -94,7 +95,7 @@ router.delete('/me', async (req: Request, res: Response, next: NextFunction) => 
 router.get('/me/export', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const data = await buildExport(req.user!.userId)
-    const filename = `mi-finca-respaldo-${new Date().toISOString().slice(0, 10)}.json`
+    const filename = `mi-finca-respaldo-${todayIsoInAppTz()}.json`
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
     res.send(JSON.stringify(data, null, 2))

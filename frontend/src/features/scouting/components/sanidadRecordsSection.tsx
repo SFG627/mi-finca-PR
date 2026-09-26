@@ -9,6 +9,7 @@ import {
 import { minDateFor, type DateRange } from '@/lib/dateRange'
 import { useFindingsLedger } from '../hooks/useFindingsApi'
 import { downloadCsv } from '@/lib/csv'
+import { todayISO } from '@/features/field/types'
 import { getPestById } from '../data/pestLibrary'
 import { SEVERITY_COLORS, SEVERITY_TEXT_COLORS, type Finding, type FindingStatus } from '../types'
 import { findingScopeSummary } from '../utils/findingScope'
@@ -145,7 +146,7 @@ export default function SanidadRecordsSection() {
   // plus farm — built client-side so filters and "Todas las fincas" apply.
   function exportFindingsCsv() {
     downloadCsv(
-      `mi-finca-sanidad-${new Date().toISOString().slice(0, 10)}.csv`,
+      `mi-finca-sanidad-${todayISO()}.csv`,
       [
         t('records.exportCols.findingDate'), t('records.exportCols.observationDate'),
         t('records.exportCols.farm'), t('records.exportCols.field'),

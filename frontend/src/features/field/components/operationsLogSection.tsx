@@ -19,6 +19,7 @@ import {
   type FarmOperation,
 } from '../hooks/useOperationsApi'
 import { downloadCsv } from '@/lib/csv'
+import { todayISO } from '../types'
 
 // ──────────────────────────────────────────────────────────────────────────
 // Operations log — Dashboard section backed by the server API:
@@ -125,7 +126,7 @@ export default function OperationsLogSection() {
   // built client-side so filters and "Todas las fincas" apply.
   function exportOperationsCsv() {
     downloadCsv(
-      `mi-finca-labores-${new Date().toISOString().slice(0, 10)}.csv`,
+      `mi-finca-labores-${todayISO()}.csv`,
       [
         t('log.exportCols.date'), t('log.exportCols.type'), t('log.exportCols.farm'),
         t('log.exportCols.field'), t('log.exportCols.livestockUnit'), t('log.exportCols.performedBy'),
@@ -393,7 +394,7 @@ function EditOperationModal({ op, onSave, onCancel }: {
 }) {
   const { t } = useTranslation('field')
   const meta = TYPE_META[op.type] ?? TYPE_META.other
-  const today = new Date().toISOString().split('T')[0]
+  const today = todayISO()
 
   const [actualDate, setActualDate] = useState(op.actualDate)
   const [product, setProduct] = useState(op.product ?? '')

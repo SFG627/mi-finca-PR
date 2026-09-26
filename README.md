@@ -131,6 +131,7 @@ The **backend** requires a `.env` in `backend/`:
 | `FRONTEND_URL` | CORS origin + base URL for emailed links (default `http://localhost:5173`) |
 | `RESEND_API_KEY` | Transactional email (verification / reset / change-email) |
 | `PORT` | API port (default `3001`) |
+| `APP_TIMEZONE` | IANA zone whose calendar decides what "today" is for due/overdue labores (default `America/Puerto_Rico`) |
 
 The **frontend** optionally takes `VITE_API_URL` (defaults to `http://localhost:3001`).
 

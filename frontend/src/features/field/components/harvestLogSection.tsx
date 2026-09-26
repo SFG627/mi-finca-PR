@@ -11,6 +11,7 @@ import { useFarmStore } from '@/store/useFarmStore'
 import { useLivestockStore } from '@/store/useLivestockStore'
 import { getAnimalById } from '@/features/livestock/data/animalLibrary'
 import { getCropById } from '../data/cropLibrary'
+import { todayISO } from '../types'
 import PriceInput, { formatMoney } from './priceInput'
 import { dateLocale, fmtNumber, localName } from '@/i18n'
 
@@ -119,7 +120,7 @@ export default function HarvestLogSection({ limit = 6 }: Props) {
   // spans every farm), built client-side so the filters apply.
   function exportHarvestsCsv() {
     downloadCsv(
-      `mi-finca-produccion-${new Date().toISOString().slice(0, 10)}.csv`,
+      `mi-finca-produccion-${todayISO()}.csv`,
       [
         t('harvestLog.exportCols.date'), t('harvestLog.exportCols.kind'), t('harvestLog.exportCols.product'),
         t('harvestLog.exportCols.farm'), t('harvestLog.exportCols.field'), t('harvestLog.exportCols.livestockUnit'),

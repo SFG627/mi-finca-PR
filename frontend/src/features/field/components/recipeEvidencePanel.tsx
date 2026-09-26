@@ -20,6 +20,15 @@ function fmtDate(iso: string): string {
   })
 }
 
+// createdAt is an instant, not a calendar date: show it in the device's
+// local time — its UTC date is already tomorrow for anything saved after
+// 8 PM in Puerto Rico.
+function fmtTimestamp(iso: string): string {
+  return new Date(iso).toLocaleDateString(dateLocale(), {
+    day: 'numeric', month: 'short', year: 'numeric',
+  })
+}
+
 function yieldsText(yields: EvidenceYield[], revenue: number | null): string | null {
   if (yields.length === 0) return null
   const parts = yields.map(y => `${fmtNumber(y.quantity)} ${y.unit}`)
@@ -64,7 +73,7 @@ function VersionBlock({ version }: { version: EvidenceVersion }) {
           v{version.number}
         </span>
         {version.note && <span className="text-[11px] italic text-[#5a6a4a]">"{version.note}"</span>}
-        <span className="text-[10px] text-[#66755a]">· {fmtDate(version.createdAt)}</span>
+        <span className="text-[10px] text-[#66755a]">· {fmtTimestamp(version.createdAt)}</span>
       </div>
 
       {version.plantings.length === 0 ? (

@@ -26,6 +26,7 @@ import RecipeEditorModal from '@/features/field/components/recipeEditorModal'
 import { liftScheduleFromPlanting, linkPlantingToVersion } from '@/features/field/utils/recipeLift'
 import type { ScheduleDraft } from '@/features/field/components/recipeScheduleForm'
 import type { PlacedField, PlantingEvent } from '@/features/field/types'
+import { todayISO } from '@/features/field/types'
 import { toast } from '@/store/useToastStore'
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -150,7 +151,7 @@ export default function InventoryPage() {
   // Clearing the filters exports everything.
   function exportSiembrasCsv() {
     downloadCsv(
-      `mi-finca-siembras-${new Date().toISOString().slice(0, 10)}.csv`,
+      `mi-finca-siembras-${todayISO()}.csv`,
       [
         t('inventory.columns.crop'), t('inventory.exportCols.farm'), t('inventory.exportCols.field'),
         t('inventory.columns.plants'), t('inventory.exportCols.rowCount'),

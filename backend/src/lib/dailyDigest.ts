@@ -1,5 +1,6 @@
 import { prisma } from './prisma'
 import { sendMail } from './mailer'
+import { todayInAppTz } from './today'
 
 // ──────────────────────────────────────────────────────────────────────────
 // Email reminders (notifications, issue #11). The cron still runs every
@@ -40,8 +41,10 @@ type FarmSummary = {
 
 const DEFAULT_LEAD_DAYS = 14
 
+// Same "today" as the API routes. At the cron hour (6:00 AM island time)
+// the farm's date and the UTC date coincide, so the digest reads the same.
 function todayUtc(now: Date): Date {
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+  return todayInAppTz(now)
 }
 
 function isMondayInPuertoRico(now: Date): boolean {

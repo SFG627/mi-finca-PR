@@ -128,4 +128,47 @@ describe('POST /findings/:id/create-operation', () => {
     expect(res.body.data.recommendedOperation.recommendedDate).toBe(future)
     expect(res.body.data.recommendedOperation.status).toBe('pending')
   })
+
+  describe('in the evening, when UTC is already tomorrow', () => {
+    afterEach(() => { jest.useRealTimers() })
+
+    it('a treatment dated today is born pending, not due', async () => {
+      const { token } = await createTestUser()
+      const farm = await createTestFarm(token)
+      const field = await createTestField(token, farm.id)
+      const finding = await createFinding(token, farm.id, field.id)
+
+      const { prisma } = await import('./helpers')
+      const event = await prisma.plantingEvent.create({
+        data: { fieldId: field.id, cropTypeId: 'platano', plantingDate: new Date('2026-01-10'), plantCount: 5 },
+      })
+
+      // April 4, 9:00 PM in Puerto Rico. Only Date is faked — Prisma and
+      // supertest keep their real timers.
+      jest.useFakeTimers({
+        now: new Date('2026-04-05T01:00:00Z'),
+        doNotFake: [
+          'hrtime', 'nextTick', 'performance', 'queueMicrotask',
+          'requestAnimationFrame', 'cancelAnimationFrame',
+          'requestIdleCallback', 'cancelIdleCallback',
+          'setImmediate', 'clearImmediate', 'setInterval', 'clearInterval',
+          'setTimeout', 'clearTimeout',
+        ],
+      })
+
+      const res = await request
+        .post(`/api/v1/farms/${farm.id}/findings/${finding.body.data.id}/create-operation`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          plantingEventId: event.id,
+          labelEs: 'Tratamiento — pulgones',
+          type: 'spray',
+          recommendedDate: '2026-04-04',
+        })
+
+      expect(res.status).toBe(201)
+      expect(res.body.data.recommendedOperation.recommendedDate).toBe('2026-04-04')
+      expect(res.body.data.recommendedOperation.status).toBe('pending')
+    })
+  })
 })

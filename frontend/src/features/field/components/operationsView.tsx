@@ -8,6 +8,7 @@ import {
 import type {
   PlantingEvent, RecommendedOperation, OperationStatus, FieldRow, PlantInstance,
 } from '../types'
+import { todayISO } from '../types'
 import type { FarmOperation } from '../hooks/useOperationsApi'
 import { getCropById } from '../data/cropLibrary'
 import PriceInput from './priceInput'
@@ -629,7 +630,7 @@ export function CheckOffModal({
   const isPhone = useIsPhone()
   // The farm-switch guard warns before discarding this form's input.
   useMarkUnsavedWork()
-  const today = new Date().toISOString().split('T')[0]
+  const today = todayISO()
   const isEdit = mode === 'edit'
   const targets = harvestTargets ?? { rows: [], freePlants: [] }
 
