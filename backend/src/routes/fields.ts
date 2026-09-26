@@ -1,4 +1,5 @@
 import { Router, Request, Response, NextFunction } from 'express'
+import type { Prisma } from '@prisma/client'
 import { requireAuth } from '../middleware/auth'
 import { prisma } from '../lib/prisma'
 import { Errors } from '../lib/errors'
@@ -12,6 +13,10 @@ import {
 } from '../contracts/fieldContract'
 import { enforceContract } from '../contracts/enforce'
 import { knownRecipeVersionIds, markVersionsReferenced } from '../lib/recipes'
+import {
+  requireSavePayload, fieldSaveTransaction,
+  insertRows, insertFreePlants, reconcilePlantingEvents,
+} from '../lib/fieldSave'
 
 const router = Router({ mergeParams: true })
 
@@ -77,13 +82,18 @@ function pointInPolygonLatLng(
 // event's rowIds/freePlantIds, but plants are created through row nesting
 // without plantingEventId — without this link, serializeField returns empty
 // rowIds/freePlantIds and the harvest row/plant selector has nothing to
-// offer. Runs after rows/plants and events all exist.
-async function linkPlantsToEvents(fieldId: string, events: any[]) {
+// offer. Runs after rows/plants and events all exist, on the transaction
+// of the save that wrote them.
+async function linkPlantsToEvents(
+  fieldId: string,
+  events: any[],
+  db: Prisma.TransactionClient = prisma
+) {
   for (const event of events ?? []) {
     const rowIds: string[] = event.rowIds ?? []
     const freePlantIds: string[] = event.freePlantIds ?? []
     if (rowIds.length === 0 && freePlantIds.length === 0) continue
-    await prisma.plantInstance.updateMany({
+    await db.plantInstance.updateMany({
       where: {
         fieldId,
         OR: [
@@ -237,6 +247,7 @@ router.post('/', requireAuth, async (req: Request, res: Response, next: NextFunc
       throw Errors.validation("kind must be 'crops' or 'livestock'")
     }
     requireGeometryBounds({ boundary, farmLat, farmLng, rows, freePlants })
+    requireSavePayload({ rows, freePlants, plantingEvents })
     const { farm } = await requireFarmStructure(userId, farmId)
 
     // Validate field boundary is inside farm boundary
@@ -245,110 +256,50 @@ router.post('/', requireAuth, async (req: Request, res: Response, next: NextFunc
       (farm.boundary as Array<{ lat: number; lng: number }>) ?? []
     )
 
-    // Recipe references on plantings: keep only version ids that exist so
-    // a stale/foreign id degrades to "no reference" instead of an FK 500.
-    const knownVersions = await knownRecipeVersionIds(
-      plantingEvents.map((e: any) => e.recipeVersionId)
-    )
+    // One transaction: a save that fails half-way leaves no orphan field.
+    const field = await fieldSaveTransaction(async (tx) => {
+      // Recipe references on plantings: keep only version ids that exist so
+      // a stale/foreign id degrades to "no reference" instead of an FK 500.
+      const knownVersions = await knownRecipeVersionIds(
+        plantingEvents.map((e: any) => e.recipeVersionId), tx
+      )
 
-    // Step 1 — Create field with free plants and planting events
-    const field = await prisma.field.create({
-      data: {
-        farmId,
-        name,
-        kind: kind ?? 'crops',
-        color,
-        shape,
-        boundary: boundary ?? [],
-        farmLat,
-        farmLng,
-        displayMode: displayMode ?? 'shape',
-        isPositioning: isPositioning ?? false,
-        isSimulated: isSimulated ?? false,
-        farmModelId: farmModelId ?? null,
-        plants: {
-          create: freePlants.map((p: any) => ({
-            id: p.id,
-            cropTypeId: p.cropTypeId,
-            lat: p.lat,
-            lng: p.lng,
-            plantingDate: new Date(p.plantingDate),
-          })),
-        },
-        plantingEvents: {
-          create: plantingEvents.map((event: any) => ({
-            id: event.id,
-            cropTypeId: event.cropTypeId,
-            plantingDate: new Date(event.plantingDate),
-            plantCount: event.plantCount,
-            isSimulated: event.isSimulated ?? false,
-            recipeVersionId:
-              event.recipeVersionId && knownVersions.has(event.recipeVersionId)
-                ? event.recipeVersionId
-                : null,
-            recommended: {
-              create: (event.operations ?? []).map((op: any) => ({
-                id: op.id,
-                templateId: op.templateId,
-                type: op.type,
-                labelEs: op.labelEs,
-                recommendedDate: new Date(op.recommendedDate),
-                status: op.status ?? 'pending',
-                completedDate: op.completedDate ? new Date(op.completedDate) : null,
-                // Keep the link to the operations-log entry across re-saves —
-                // PATCH recreates these rows, and losing the link would orphan
-                // completed check-offs (routes/operations.ts).
-                completedOperationId: op.completedOperationId ?? null,
-                notes: op.notes ?? null,
-                product: op.product ?? null,
-                quantity: op.quantity ?? null,
-                unit: op.unit ?? null,
-              })),
-            },
-          })),
-        },
-      },
-      select: { id: true },
-    })
-
-    // Step 2 — Create rows separately now that we have field.id
-    for (const row of rows) {
-      await prisma.fieldRow.create({
+      // Step 1 — Create the field
+      const newField = await tx.field.create({
         data: {
-          id: row.id,
-          fieldId: field.id,
-          startLat: row.startLat,
-          startLng: row.startLng,
-          endLat: row.endLat,
-          endLng: row.endLng,
-          spacingFt: row.spacingFt,
-          primaryCropTypeId: row.primaryCropTypeId,
-          companionCropTypeId: row.companionCropTypeId ?? null,
-          plantingDate: new Date(row.plantingDate),
-          // Contour rows carry their drawn path; straight rows leave null.
-          ...(Array.isArray(row.path) ? { path: row.path } : {}),
-          ...(typeof row.pathClosed === 'boolean' ? { pathClosed: row.pathClosed } : {}),
-          plants: {
-            create: (row.plants ?? []).map((p: any) => ({
-              id: p.id,
-              field: { connect: { id: field.id } },
-              cropTypeId: p.cropTypeId,
-              lat: p.lat,
-              lng: p.lng,
-              plantingDate: new Date(p.plantingDate),
-            })),
-          },
+          farmId,
+          name,
+          kind: kind ?? 'crops',
+          color,
+          shape,
+          boundary: boundary ?? [],
+          farmLat,
+          farmLng,
+          displayMode: displayMode ?? 'shape',
+          isPositioning: isPositioning ?? false,
+          isSimulated: isSimulated ?? false,
+          farmModelId: farmModelId ?? null,
         },
+        select: { id: true },
       })
-    }
 
-    // Step 3 — Link plants to their planting events (rows now exist)
-    await linkPlantsToEvents(field.id, plantingEvents)
+      // Step 2 — Create rows, plants and planting events now that we have
+      // the field id
+      await insertRows(tx, newField.id, rows)
+      await insertFreePlants(tx, newField.id, freePlants)
+      await reconcilePlantingEvents(tx, { id: newField.id, farmId }, plantingEvents, knownVersions)
 
-    // R1: the first planting that stamps from a recipe version freezes it.
-    await markVersionsReferenced(
-      plantingEvents.map((e: any) => e.recipeVersionId).filter((v: any) => v && knownVersions.has(v))
-    )
+      // Step 3 — Link plants to their planting events (rows now exist)
+      await linkPlantsToEvents(newField.id, plantingEvents, tx)
+
+      // R1: the first planting that stamps from a recipe version freezes it.
+      await markVersionsReferenced(
+        plantingEvents.map((e: any) => e.recipeVersionId).filter((v: any) => v && knownVersions.has(v)),
+        tx
+      )
+
+      return newField
+    })
 
     // Step 4 — Fetch and return complete field with all relations
     const created = await prisma.field.findFirst({
@@ -384,9 +335,12 @@ router.patch('/:id', requireAuth, async (req: Request, res: Response, next: Next
       rows, freePlants, plantingEvents,
     } = req.body
 
+    // The structural gate goes first: the guards below read into the
+    // payload and would throw on a shape it has not vouched for.
+    parseBody(updateFieldRequestSchema, req.body)
     requireGeometryBounds({ boundary, farmLat, farmLng, rows, freePlants })
     requireNameLength(req.body?.name, 80)
-    parseBody(updateFieldRequestSchema, req.body)
+    requireSavePayload({ rows, freePlants, plantingEvents })
 
     // Validate field boundary is inside farm boundary
     if (boundary && boundary.length >= 3) {
@@ -396,130 +350,64 @@ router.patch('/:id', requireAuth, async (req: Request, res: Response, next: Next
       )
     }
 
-    // Update scalar fields
-    await prisma.field.update({
-      where: { id },
-      data: {
-        ...(name !== undefined && { name }),
-        ...(color !== undefined && { color }),
-        ...(shape !== undefined && { shape }),
-        ...(boundary !== undefined && { boundary }),
-        ...(farmLat !== undefined && { farmLat }),
-        ...(farmLng !== undefined && { farmLng }),
-        ...(displayMode !== undefined && { displayMode }),
-        ...(isPositioning !== undefined && { isPositioning }),
-        ...(isSimulated !== undefined && { isSimulated }),
-        ...(farmModelId !== undefined && { farmModelId }),
-      },
-    })
-
-    // Replace rows entirely if provided
-    if (rows !== undefined) {
-      await prisma.plantInstance.deleteMany({ where: { fieldId: id } })
-      await prisma.fieldRow.deleteMany({ where: { fieldId: id } })
-
-      for (const row of rows) {
-        await prisma.fieldRow.create({
-          data: {
-            id: row.id,
-            fieldId: id,
-            startLat: row.startLat,
-            startLng: row.startLng,
-            endLat: row.endLat,
-            endLng: row.endLng,
-            spacingFt: row.spacingFt,
-            primaryCropTypeId: row.primaryCropTypeId,
-            companionCropTypeId: row.companionCropTypeId ?? null,
-            plantingDate: new Date(row.plantingDate),
-            ...(Array.isArray(row.path) ? { path: row.path } : {}),
-            ...(typeof row.pathClosed === 'boolean' ? { pathClosed: row.pathClosed } : {}),
-            plants: {
-              create: (row.plants ?? []).map((p: any) => ({
-                id: p.id,
-                field: { connect: { id } },
-                cropTypeId: p.cropTypeId,
-                lat: p.lat,
-                lng: p.lng,
-                plantingDate: new Date(p.plantingDate),
-              })),
-            },
-          },
-        })
-      }
-    }
-
-    // Replace free plants if provided
-    if (freePlants !== undefined) {
-      await prisma.plantInstance.deleteMany({
-        where: { fieldId: id, rowId: null },
+    // One transaction: a save that fails half-way leaves the field as it was.
+    await fieldSaveTransaction(async (tx) => {
+      // Update scalar fields
+      await tx.field.update({
+        where: { id },
+        data: {
+          ...(name !== undefined && { name }),
+          ...(color !== undefined && { color }),
+          ...(shape !== undefined && { shape }),
+          ...(boundary !== undefined && { boundary }),
+          ...(farmLat !== undefined && { farmLat }),
+          ...(farmLng !== undefined && { farmLng }),
+          ...(displayMode !== undefined && { displayMode }),
+          ...(isPositioning !== undefined && { isPositioning }),
+          ...(isSimulated !== undefined && { isSimulated }),
+          ...(farmModelId !== undefined && { farmModelId }),
+        },
       })
-      for (const p of freePlants) {
-        await prisma.plantInstance.create({
-          data: {
-            id: p.id,
-            fieldId: id,
-            rowId: null,
-            cropTypeId: p.cropTypeId,
-            lat: p.lat,
-            lng: p.lng,
-            plantingDate: new Date(p.plantingDate),
-          },
-        })
+
+      // Replace rows entirely if provided. Their plants go first, and only
+      // theirs: free plants are replaced below, when the payload has them.
+      if (rows !== undefined) {
+        await tx.plantInstance.deleteMany({ where: { fieldId: id, rowId: { not: null } } })
+        await tx.fieldRow.deleteMany({ where: { fieldId: id } })
+        await insertRows(tx, id, rows)
       }
-    }
 
-    // Replace planting events if provided
-    if (plantingEvents !== undefined) {
-      // See POST: unknown recipe-version ids degrade to "no reference".
-      const knownVersions = await knownRecipeVersionIds(
-        plantingEvents.map((e: any) => e.recipeVersionId)
-      )
-      await prisma.plantingEvent.deleteMany({ where: { fieldId: id } })
-
-      for (const event of plantingEvents) {
-        await prisma.plantingEvent.create({
-          data: {
-            id: event.id,
-            fieldId: id,
-            cropTypeId: event.cropTypeId,
-            plantingDate: new Date(event.plantingDate),
-            plantCount: event.plantCount,
-            isSimulated: event.isSimulated ?? false,
-            recipeVersionId:
-              event.recipeVersionId && knownVersions.has(event.recipeVersionId)
-                ? event.recipeVersionId
-                : null,
-            recommended: {
-              create: (event.operations ?? []).map((op: any) => ({
-                id: op.id,
-                templateId: op.templateId,
-                type: op.type,
-                labelEs: op.labelEs,
-                recommendedDate: new Date(op.recommendedDate),
-                status: op.status ?? 'pending',
-                completedDate: op.completedDate ? new Date(op.completedDate) : null,
-                // Keep the link to the operations-log entry across re-saves —
-                // PATCH recreates these rows, and losing the link would orphan
-                // completed check-offs (routes/operations.ts).
-                completedOperationId: op.completedOperationId ?? null,
-                notes: op.notes ?? null,
-                product: op.product ?? null,
-                quantity: op.quantity ?? null,
-                unit: op.unit ?? null,
-              })),
-            },
-          },
+      // Replace free plants if provided
+      if (freePlants !== undefined) {
+        await tx.plantInstance.deleteMany({
+          where: { fieldId: id, rowId: null },
         })
+        await insertFreePlants(tx, id, freePlants)
       }
-    }
 
-    // Re-link plants to events — rows/plants/events may all have been
-    // replaced above, and the replace path never sets plantingEventId.
-    if (plantingEvents !== undefined) {
-      await linkPlantsToEvents(id, plantingEvents)
-      // R1: freeze the recipe versions these plantings stamped from.
-      await markVersionsReferenced(plantingEvents.map((e: any) => e.recipeVersionId))
-    }
+      // Reconcile planting events if provided — a field save owns which
+      // plantings exist and their planned calendar, never the recorded work
+      // (lib/fieldSave.ts).
+      if (plantingEvents !== undefined) {
+        // See POST: unknown recipe-version ids degrade to "no reference".
+        const knownVersions = await knownRecipeVersionIds(
+          plantingEvents.map((e: any) => e.recipeVersionId), tx
+        )
+        await reconcilePlantingEvents(tx, { id, farmId }, plantingEvents, knownVersions)
+
+        // Re-link plants to events: the payload says which plants belong to
+        // each planting it carries. Plants replaced above start unlinked;
+        // the ones left in place still point at their planting, so clear
+        // those links first.
+        await tx.plantInstance.updateMany({
+          where: { fieldId: id, plantingEventId: { in: plantingEvents.map((e: any) => e.id) } },
+          data: { plantingEventId: null },
+        })
+        await linkPlantsToEvents(id, plantingEvents, tx)
+        // R1: freeze the recipe versions these plantings stamped from.
+        await markVersionsReferenced(plantingEvents.map((e: any) => e.recipeVersionId), tx)
+      }
+    })
 
     // Fetch and return updated field with all relations
     const updated = await prisma.field.findFirst({
