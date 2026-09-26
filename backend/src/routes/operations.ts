@@ -69,6 +69,18 @@ async function findOwnedRecommendedOp(farmId: string, recOpId: string) {
   })
 }
 
+// Every recommendation of this farm, deleted fields and herds included —
+// the scope for writes that FOLLOW a log entry (mirrored edits, reopening
+// on delete). completedOperationId is stored as the field save sent it, so
+// a recommendation of another farm can name this farm's log entry; it must
+// not receive this farm's dates, products, quantities or notes.
+const recOpsOfFarm = (farmId: string) => ({
+  OR: [
+    { plantingEvent: { field: { farmId } } },
+    { livestockUnit: { farmId } },
+  ],
+})
+
 // If a completed operation is a harvest with a quantity, mirror it into the
 // harvest_yields table so yield reports don't have to re-derive it from the
 // operations log (SDD §3 — harvest data feeds financial projections).
@@ -385,7 +397,7 @@ router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => 
       })
 
       await tx.harvestYield.updateMany({
-        where: { operationId: id, deletedAt: null },
+        where: { operationId: id, farmId, deletedAt: null },
         data: {
           ...(actualDate !== undefined && { harvestDate: new Date(actualDate) }),
           ...(quantity !== undefined && quantity !== null && { quantity }),
@@ -395,7 +407,7 @@ router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => 
       })
 
       await tx.recommendedOperation.updateMany({
-        where: { completedOperationId: id },
+        where: { completedOperationId: id, ...recOpsOfFarm(farmId) },
         data: {
           ...(actualDate !== undefined && { completedDate: new Date(actualDate) }),
           ...(product !== undefined && { product }),
@@ -439,7 +451,7 @@ router.delete('/:id', async (req: Request, res: Response, next: NextFunction) =>
       const today = new Date()
       today.setUTCHours(0, 0, 0, 0)
       const linked = await tx.recommendedOperation.findMany({
-        where: { completedOperationId: id },
+        where: { completedOperationId: id, ...recOpsOfFarm(farmId) },
         select: { id: true, recommendedDate: true },
       })
       for (const rec of linked) {
@@ -454,7 +466,7 @@ router.delete('/:id', async (req: Request, res: Response, next: NextFunction) =>
       }
       // The yield this log entry produced goes with it (soft delete).
       await tx.harvestYield.updateMany({
-        where: { operationId: id, deletedAt: null },
+        where: { operationId: id, farmId, deletedAt: null },
         data: { deletedAt: new Date() },
       })
       await tx.operation.delete({ where: { id } })

@@ -1,4 +1,7 @@
-import { request, createTestUser, createTestFarm, createTestField, cleanDatabase } from './helpers'
+import {
+  request, prisma, createTestUser, createTestFarm, createTestField,
+  seedRecommendedOp, cleanDatabase,
+} from './helpers'
 
 beforeEach(async () => { await cleanDatabase() })
 
@@ -135,5 +138,89 @@ describe('PATCH + DELETE /api/v1/farms/:farmId/operations/:id', () => {
       .get(`/api/v1/farms/${farm.id}/operations`)
       .set('Authorization', `Bearer ${token}`)
     expect(list.body.data).toHaveLength(0)
+  })
+})
+
+// A log entry's edits are mirrored onto the recommendation it completed,
+// found by completedOperationId — a column stored as the field save sent
+// it. Those writes may only reach recommendations of the farm in the URL.
+describe('PATCH + DELETE /api/v1/farms/:farmId/operations/:id — mirrored recommendations', () => {
+  // Farm A owns a log entry; farm B holds a completed recommendation that
+  // names it (the stored state a crafted field save leaves behind).
+  async function foreignRecommendationNaming() {
+    const owner = await createTestUser()
+    const farm = await createTestFarm(owner.token)
+    const logged = await request
+      .post(`/api/v1/farms/${farm.id}/operations`)
+      .set('Authorization', `Bearer ${owner.token}`)
+      .send({ type: 'fertilization', actualDate: '2026-07-10' })
+    expect(logged.status).toBe(201)
+    const operationId = logged.body.data.id as string
+
+    const other = await createTestUser()
+    const otherFarm = await createTestFarm(other.token)
+    const otherField = await createTestField(other.token, otherFarm.id)
+    const { recOp } = await seedRecommendedOp(otherField.id, { status: 'completed' })
+    await prisma.recommendedOperation.update({
+      where: { id: recOp.id },
+      data: { completedDate: new Date('2026-07-01'), completedOperationId: operationId },
+    })
+    return { owner, farm, operationId, foreignRecOpId: recOp.id }
+  }
+
+  it('mirrors an edit onto the recommendation it completed', async () => {
+    const { token } = await createTestUser()
+    const farm = await createTestFarm(token)
+    const field = await createTestField(token, farm.id)
+    const { recOp } = await seedRecommendedOp(field.id)
+
+    const done = await request
+      .post(`/api/v1/farms/${farm.id}/recommended-operations/${recOp.id}/complete`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ completedDate: '2026-08-01' })
+    expect(done.status).toBe(201)
+
+    const patched = await request
+      .patch(`/api/v1/farms/${farm.id}/operations/${done.body.data.operation.id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ notes: 'Abono 10-10-10', product: 'Triple 10' })
+    expect(patched.status).toBe(200)
+
+    const mirrored = await prisma.recommendedOperation.findUnique({ where: { id: recOp.id } })
+    expect(mirrored?.notes).toBe('Abono 10-10-10')
+    expect(mirrored?.product).toBe('Triple 10')
+  })
+
+  it('does not copy an edit onto a recommendation of another farm', async () => {
+    const { owner, farm, operationId, foreignRecOpId } = await foreignRecommendationNaming()
+
+    const patched = await request
+      .patch(`/api/v1/farms/${farm.id}/operations/${operationId}`)
+      .set('Authorization', `Bearer ${owner.token}`)
+      .send({ actualDate: '2026-07-12', notes: 'Proveedor nuevo', product: 'Triple 10', quantity: 50, unit: 'lb' })
+    expect(patched.status).toBe(200)
+
+    const foreign = await prisma.recommendedOperation.findUnique({ where: { id: foreignRecOpId } })
+    expect(foreign?.notes).toBeNull()
+    expect(foreign?.product).toBeNull()
+    expect(foreign?.quantity).toBeNull()
+    expect(foreign?.unit).toBeNull()
+    expect(foreign?.completedDate?.toISOString().slice(0, 10)).toBe('2026-07-01')
+  })
+
+  it('does not reopen a recommendation of another farm on delete', async () => {
+    const { owner, farm, operationId, foreignRecOpId } = await foreignRecommendationNaming()
+
+    const deleted = await request
+      .delete(`/api/v1/farms/${farm.id}/operations/${operationId}`)
+      .set('Authorization', `Bearer ${owner.token}`)
+    expect(deleted.status).toBe(200)
+
+    // The database drops the dangling pointer (ON DELETE SET NULL); the
+    // other farm's calendar is otherwise left as it was.
+    const foreign = await prisma.recommendedOperation.findUnique({ where: { id: foreignRecOpId } })
+    expect(foreign?.status).toBe('completed')
+    expect(foreign?.completedDate?.toISOString().slice(0, 10)).toBe('2026-07-01')
+    expect(foreign?.completedOperationId).toBeNull()
   })
 })
