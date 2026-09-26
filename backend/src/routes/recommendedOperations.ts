@@ -395,11 +395,13 @@ router.post('/:id/undo', async (req: Request, res: Response, next: NextFunction)
     const updated = await prisma.$transaction(async (tx) => {
       if (recOp.completedOperationId) {
         // Remove the yield the check-off created, then the log entry itself.
+        // Both scoped to this farm: completedOperationId is stored as the
+        // field save sent it, so it can name a log entry of another farm.
         await tx.harvestYield.updateMany({
-          where: { operationId: recOp.completedOperationId, deletedAt: null },
+          where: { operationId: recOp.completedOperationId, farmId, deletedAt: null },
           data: { deletedAt: new Date() },
         })
-        await tx.operation.deleteMany({ where: { id: recOp.completedOperationId } })
+        await tx.operation.deleteMany({ where: { id: recOp.completedOperationId, farmId } })
       }
       return tx.recommendedOperation.update({
         where: { id: recOp.id },

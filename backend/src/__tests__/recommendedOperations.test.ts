@@ -1,5 +1,5 @@
 import {
-  request, createTestUser, createTestFarm, createTestField,
+  request, prisma, createTestUser, createTestFarm, createTestField,
   seedRecommendedOp, cleanDatabase,
 } from './helpers'
 
@@ -128,5 +128,69 @@ describe('POST /api/v1/farms/:farmId/recommended-operations/:id/skip + /undo', (
       .set('Authorization', `Bearer ${token}`)
     expect(undone.status).toBe(200)
     expect(['pending', 'due']).toContain(undone.body.data.status)
+  })
+})
+
+// completedOperationId is stored as the field save sent it, so it can name
+// a log entry of ANY farm — undo may only delete inside the farm in the URL.
+describe('POST /api/v1/farms/:farmId/recommended-operations/:id/undo — completed check-offs', () => {
+  it('deletes the completing log entry and soft-deletes its yield', async () => {
+    const { token } = await createTestUser()
+    const farm = await createTestFarm(token)
+    const field = await createTestField(token, farm.id)
+    const { recOp } = await seedRecommendedOp(field.id, { type: 'harvest' })
+
+    const done = await request
+      .post(`/api/v1/farms/${farm.id}/recommended-operations/${recOp.id}/complete`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ completedDate: '2026-08-01', quantity: 40, unit: 'lb' })
+    expect(done.status).toBe(201)
+    const operationId = done.body.data.operation.id
+
+    const undone = await request
+      .post(`/api/v1/farms/${farm.id}/recommended-operations/${recOp.id}/undo`)
+      .set('Authorization', `Bearer ${token}`)
+    expect(undone.status).toBe(200)
+    expect(['pending', 'due']).toContain(undone.body.data.status)
+    expect(undone.body.data.completedOperationId).toBeNull()
+
+    expect(await prisma.operation.findUnique({ where: { id: operationId } })).toBeNull()
+    const yields = await prisma.harvestYield.findMany({ where: { farmId: farm.id } })
+    expect(yields).toHaveLength(1)
+    expect(yields[0].deletedAt).not.toBeNull()
+  })
+
+  it('leaves a log entry of another farm untouched', async () => {
+    const victim = await createTestUser()
+    const victimFarm = await createTestFarm(victim.token)
+    const logged = await request
+      .post(`/api/v1/farms/${victimFarm.id}/operations`)
+      .set('Authorization', `Bearer ${victim.token}`)
+      .send({ type: 'harvest', actualDate: '2026-08-01', quantity: 40, unit: 'lb', cropTypeId: 'platano' })
+    expect(logged.status).toBe(201)
+    const victimOperationId = logged.body.data.id
+
+    const caller = await createTestUser()
+    const farm = await createTestFarm(caller.token)
+    const field = await createTestField(caller.token, farm.id)
+    const { recOp } = await seedRecommendedOp(field.id, { status: 'completed' })
+    // The stored state a crafted field save leaves behind.
+    await prisma.recommendedOperation.update({
+      where: { id: recOp.id },
+      data: { completedDate: new Date('2026-08-01'), completedOperationId: victimOperationId },
+    })
+
+    const undone = await request
+      .post(`/api/v1/farms/${farm.id}/recommended-operations/${recOp.id}/undo`)
+      .set('Authorization', `Bearer ${caller.token}`)
+    expect(undone.status).toBe(200)
+    expect(['pending', 'due']).toContain(undone.body.data.status)
+    expect(undone.body.data.completedOperationId).toBeNull()
+
+    expect(await prisma.operation.findUnique({ where: { id: victimOperationId } })).not.toBeNull()
+    const victimYields = await prisma.harvestYield.findMany({ where: { farmId: victimFarm.id } })
+    expect(victimYields).toHaveLength(1)
+    expect(victimYields[0].deletedAt).toBeNull()
+    expect(victimYields[0].operationId).toBe(victimOperationId)
   })
 })
