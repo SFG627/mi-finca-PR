@@ -10,11 +10,27 @@ export type BBox = {
   north: number
 }
 
-// Geographic constants for Puerto Rico's latitude
-// ── Added by Claude — exported so the row-fill helpers below (and callers)
-// can share the same ft⇄degree conversion instead of duplicating magic numbers.
-export const FT_PER_LAT = 364000
-export const FT_PER_LNG = 298000
+// ── Feet per degree ───────────────────────────────────────────────────
+// A degree of latitude is the same length everywhere, but a degree of
+// longitude shrinks with cos(latitude) — so the east-west factor has to
+// come from the latitude being measured, not from a constant. The fixed
+// FT_PER_LNG this replaces (298,000) is the value for ~35°N; at Puerto
+// Rico's ~18°N a degree of longitude is ~347,000 ft, which made every
+// east-west distance, row length, plant count and field acreage in the
+// editor come out ~14% short.
+//
+// Both factors use the same spherical earth as lib/geo.ts (the farm's
+// geodesic acreage), so a field drawn over a whole farm measures the same
+// area as the farm itself.
+const EARTH_RADIUS_M = 6378137
+const FT_PER_M = 1 / 0.3048
+const DEG = Math.PI / 180
+
+export const FT_PER_LAT = EARTH_RADIUS_M * DEG * FT_PER_M // ≈ 365,221
+
+export function ftPerLng(latDeg: number): number {
+  return FT_PER_LAT * Math.cos(latDeg * DEG)
+}
 
 // ── BBox from farm boundary ───────────────────────────────────────────
 
@@ -55,8 +71,11 @@ function adjustBboxToAspectRatio(bbox: BBox, targetRatio: number): BBox {
   const lngRange = bbox.east - bbox.west
   const latRange = bbox.north - bbox.south
 
-  // Normalize lng to lat-equivalent degrees at PR latitude
-  const lngNorm = lngRange * (FT_PER_LNG / FT_PER_LAT)
+  // Normalize lng to lat-equivalent degrees at the box's own latitude.
+  // Both branches below pad symmetrically, so the mid-latitude — and with
+  // it this factor — is the same for the box that comes out.
+  const lngToLat = ftPerLng((bbox.north + bbox.south) / 2) / FT_PER_LAT
+  const lngNorm = lngRange * lngToLat
   const currentRatio = lngNorm / latRange
 
   if (currentRatio > targetRatio) {
@@ -67,7 +86,7 @@ function adjustBboxToAspectRatio(bbox: BBox, targetRatio: number): BBox {
   } else {
     // Too tall — expand longitude
     const targetLngNorm = latRange * targetRatio
-    const targetLngRange = targetLngNorm * (FT_PER_LAT / FT_PER_LNG)
+    const targetLngRange = targetLngNorm / lngToLat
     const pad = (targetLngRange - lngRange) / 2
     return { ...bbox, west: bbox.west - pad, east: bbox.east + pad }
   }
@@ -98,7 +117,7 @@ export type CanvasScale = {
 }
 
 export function getCanvasScale(bbox: BBox): CanvasScale {
-  const totalWidthFt = (bbox.east - bbox.west) * FT_PER_LNG
+  const totalWidthFt = (bbox.east - bbox.west) * ftPerLng((bbox.north + bbox.south) / 2)
   const totalHeightFt = (bbox.north - bbox.south) * FT_PER_LAT
   const ftPerPixelX = totalWidthFt / CANVAS_W
   const ftPerPixelY = totalHeightFt / CANVAS_H
@@ -179,7 +198,7 @@ export function calculateRowPlantPositions(
   const dLat = endLat - startLat
   const dLng = endLng - startLng
   const lengthFt = Math.sqrt(
-    (dLat * FT_PER_LAT) ** 2 + (dLng * FT_PER_LNG) ** 2
+    (dLat * FT_PER_LAT) ** 2 + (dLng * ftPerLng((startLat + endLat) / 2)) ** 2
   )
   if (lengthFt <= 0 || spacingFt <= 0) return []
   const count = Math.max(2, Math.floor(lengthFt / spacingFt) + 1)
@@ -194,7 +213,7 @@ export function distanceFt(
   lat2: number, lng2: number
 ): number {
   const dLat = (lat2 - lat1) * FT_PER_LAT
-  const dLng = (lng2 - lng1) * FT_PER_LNG
+  const dLng = (lng2 - lng1) * ftPerLng((lat1 + lat2) / 2)
   return Math.sqrt(dLat * dLat + dLng * dLng)
 }
 
@@ -403,17 +422,20 @@ export function pointInPolygon(
 
 // ── Field-relative orientation ────────────────────────────────────────
 // Rows must follow the field's own orientation, not the compass. We work in a
-// flat "feet" plane (lng→x·FT_PER_LNG, lat→y·FT_PER_LAT relative to a corner),
+// flat "feet" plane (lng→x·ftPerLng(lat0), lat→y·FT_PER_LAT relative to a corner),
 // find the field's minimum-area bounding rectangle, and lay rows out along its
 // axes. That way a field drawn at any angle gets rows parallel to its sides.
 
 type FtPoint = { x: number; y: number }
 
+// Both directions scale longitude by the SAME reference latitude (the
+// plane's origin), so a point survives the round trip exactly. Across a
+// field the true factor drifts by less than 0.01%.
 function toFt(p: { lat: number; lng: number }, lat0: number, lng0: number): FtPoint {
-  return { x: (p.lng - lng0) * FT_PER_LNG, y: (p.lat - lat0) * FT_PER_LAT }
+  return { x: (p.lng - lng0) * ftPerLng(lat0), y: (p.lat - lat0) * FT_PER_LAT }
 }
 function ftToLatLng(pt: FtPoint, lat0: number, lng0: number): { lat: number; lng: number } {
-  return { lat: lat0 + pt.y / FT_PER_LAT, lng: lng0 + pt.x / FT_PER_LNG }
+  return { lat: lat0 + pt.y / FT_PER_LAT, lng: lng0 + pt.x / ftPerLng(lat0) }
 }
 
 // Andrew's monotone-chain convex hull (counter-clockwise).
