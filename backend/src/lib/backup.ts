@@ -115,10 +115,19 @@ export async function clearUserData(userId: string): Promise<void> {
 const num = (v: unknown) => (v === null || v === undefined ? null : Number(v))
 const date = (v: unknown) => new Date(String(v))
 const ids = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : [])
+// A reference copied from the file survives only when it names a row in
+// the given set — anything else is stored as null.
+const pick = (known: Set<string>, v: unknown) => (v && known.has(String(v)) ? String(v) : null)
+
+// The owner is Farm.userId, never a membership row (lib/farmAccess.ts).
+const MEMBER_ROLES = ['admin', 'operator']
 
 export async function restoreFromBackup(userId: string, data: any): Promise<{ farms: number }> {
   // Only reference users that still exist (performedBy, team members) —
-  // the backup may be older than a teammate's account.
+  // the backup may be older than a teammate's account. performedBy stays
+  // this loose on purpose (any existing user): genuine backups name
+  // teammates who have since left, and the id only labels rows inside
+  // the restoring user's own farms.
   const referenced = new Set<string>()
   for (const farm of data.farms ?? []) {
     for (const m of farm.members ?? []) referenced.add(String(m.userId))
@@ -136,7 +145,9 @@ export async function restoreFromBackup(userId: string, data: any): Promise<{ fa
   // References into rows this backup does NOT carry (built-in crops,
   // system recipe versions) may not exist on this install — resolve
   // before the transaction, since a failed create inside it would abort
-  // the whole restore.
+  // the whole restore. Only BUILT-IN crops qualify: another account's
+  // custom crop is private, and the restoring user's own are deleted
+  // below and come back from the file.
   const backupCropIds = new Set<string>((data.customCrops ?? []).map((c: any) => String(c.id)))
   const recipeCropIds: string[] = [
     ...new Set<string>(
@@ -146,12 +157,15 @@ export async function restoreFromBackup(userId: string, data: any): Promise<{ fa
     ),
   ]
   const knownCrops = new Set(
-    (await prisma.cropType.findMany({ where: { id: { in: recipeCropIds } }, select: { id: true } })).map(c => c.id)
+    (await prisma.cropType.findMany({
+      where: { id: { in: recipeCropIds }, isBuiltIn: true }, select: { id: true },
+    })).map(c => c.id)
   )
   const cropExists = (cid: string) => backupCropIds.has(cid) || knownCrops.has(cid)
 
   // Recipe-version references on plantings: restored own versions plus
-  // versions already in this database (system recipes).
+  // SYSTEM recipe versions already in this database — never a version of
+  // another author's recipe (same rule as PUT /recipes/defaults).
   const restoredVersionIds = new Set<string>(
     (data.recipes ?? [])
       .filter((r: any) => cropExists(String(r.cropTypeId)))
@@ -168,7 +182,9 @@ export async function restoreFromBackup(userId: string, data: any): Promise<{ fa
     ),
   ]
   const dbVersionIds = new Set(
-    (await prisma.recipeVersion.findMany({ where: { id: { in: externalVersionIds } }, select: { id: true } })).map(v => v.id)
+    (await prisma.recipeVersion.findMany({
+      where: { id: { in: externalVersionIds }, recipe: { authorUserId: null } }, select: { id: true },
+    })).map(v => v.id)
   )
   const versionRef = (v: unknown) =>
     v && (restoredVersionIds.has(String(v)) || dbVersionIds.has(String(v))) ? String(v) : null
@@ -216,6 +232,19 @@ export async function restoreFromBackup(userId: string, data: any): Promise<{ fa
     }
 
     for (const farm of data.farms ?? []) {
+      // Ids this restore creates in THIS farm. The file is user-supplied:
+      // an id that merely exists in the database may belong to another
+      // account, and a genuine export can name parents it left out (a
+      // deleted field's log entries). Every reference below resolves
+      // against these sets, never against the database.
+      const made = {
+        fields: new Set<string>(),
+        corrales: new Set<string>(),
+        events: new Set<string>(),
+        recOps: new Set<string>(),
+        units: new Set<string>(),
+        operations: new Set<string>(),
+      }
       // Deferred FK links: rec-op → completing log entry (created later).
       const completedLinks: Array<{ recOpId: string; operationId: string }> = []
       for (const field of farm.fields ?? []) {
@@ -274,6 +303,12 @@ export async function restoreFromBackup(userId: string, data: any): Promise<{ fa
             },
           },
         })
+        made.fields.add(field.id)
+        if (field.kind === 'livestock') made.corrales.add(field.id)
+        for (const ev of field.plantingEvents ?? []) {
+          made.events.add(ev.id)
+          for (const op of ev.operations ?? []) made.recOps.add(op.id)
+        }
         for (const row of field.rows ?? []) {
           await tx.fieldRow.create({
             data: {
@@ -289,7 +324,7 @@ export async function restoreFromBackup(userId: string, data: any): Promise<{ fa
               plants: {
                 create: (row.plants ?? []).map((p: any) => ({
                   id: p.id, fieldId: field.id,
-                  plantingEventId: p.plantingEventId ?? null,
+                  plantingEventId: pick(made.events, p.plantingEventId),
                   cropTypeId: p.cropTypeId,
                   lat: num(p.lat) ?? 0, lng: num(p.lng) ?? 0,
                   plantingDate: date(p.plantingDate),
@@ -302,7 +337,7 @@ export async function restoreFromBackup(userId: string, data: any): Promise<{ fa
           await tx.plantInstance.create({
             data: {
               id: p.id, fieldId: field.id,
-              plantingEventId: p.plantingEventId ?? null,
+              plantingEventId: pick(made.events, p.plantingEventId),
               cropTypeId: p.cropTypeId,
               lat: num(p.lat) ?? 0, lng: num(p.lng) ?? 0,
               plantingDate: date(p.plantingDate),
@@ -315,7 +350,7 @@ export async function restoreFromBackup(userId: string, data: any): Promise<{ fa
         await tx.livestockUnit.create({
           data: {
             id: unit.id, farmId: farm.id,
-            fieldId: unit.fieldId ?? null,
+            fieldId: pick(made.corrales, unit.fieldId),
             name: unit.name, animalType: unit.animalType,
             currentCount: num(unit.currentCount) ?? 0,
             acquisitionDate: date(unit.acquisitionDate),
@@ -323,16 +358,17 @@ export async function restoreFromBackup(userId: string, data: any): Promise<{ fa
             notes: unit.notes ?? null,
           },
         })
+        made.units.add(unit.id)
       }
 
       for (const op of farm.operations ?? []) {
         await tx.operation.create({
           data: {
             id: op.id, farmId: farm.id,
-            fieldId: op.fieldId ?? null,
-            plantingEventId: op.plantingEventId ?? null,
-            livestockUnitId: op.livestockUnitId ?? null,
-            recommendedOperationId: op.recommendedOperationId ?? null,
+            fieldId: pick(made.fields, op.fieldId),
+            plantingEventId: pick(made.events, op.plantingEventId),
+            livestockUnitId: pick(made.units, op.livestockUnitId),
+            recommendedOperationId: pick(made.recOps, op.recommendedOperationId),
             type: op.type, actualDate: date(op.actualDate),
             notes: op.notes ?? null, product: op.product ?? null,
             quantity: num(op.quantity), unit: op.unit ?? null,
@@ -343,23 +379,29 @@ export async function restoreFromBackup(userId: string, data: any): Promise<{ fa
             performedByUserId: userOrNull(op.performedByUserId),
           },
         })
+        made.operations.add(op.id)
       }
 
-      // Operations exist now — apply the deferred check-off links.
+      // Operations exist now — apply the deferred check-off links, only to
+      // a log entry restored into this farm. Checked up front: catching the
+      // error cannot skip a bad link, because a failed statement aborts the
+      // whole transaction.
       for (const link of completedLinks) {
+        if (!made.operations.has(link.operationId)) continue
         await tx.recommendedOperation.update({
           where: { id: link.recOpId },
           data: { completedOperationId: link.operationId },
-        }).catch(() => { /* dangling link in an edited backup — skip */ })
+        })
       }
 
       for (const h of farm.harvests ?? []) {
         await tx.harvestYield.create({
           data: {
             id: h.id, farmId: farm.id,
-            fieldId: h.fieldId ?? null, operationId: h.operationId ?? null,
+            fieldId: pick(made.fields, h.fieldId),
+            operationId: pick(made.operations, h.operationId),
             cropTypeId: h.cropTypeId ?? null,
-            livestockUnitId: h.livestockUnitId ?? null,
+            livestockUnitId: pick(made.units, h.livestockUnitId),
             productId: h.productId ?? null,
             quantity: num(h.quantity) ?? 0, unit: h.unit,
             revenue: num(h.revenue),
@@ -370,6 +412,9 @@ export async function restoreFromBackup(userId: string, data: any): Promise<{ fa
       }
 
       for (const fi of farm.findings ?? []) {
+        // A finding lives under its field — without one restored into this
+        // farm it has nowhere to go, and must not land in someone else's.
+        if (!made.fields.has(fi.fieldId)) continue
         await tx.finding.create({
           data: {
             id: fi.id, fieldId: fi.fieldId,
@@ -378,7 +423,7 @@ export async function restoreFromBackup(userId: string, data: any): Promise<{ fa
             foundDate: date(fi.foundDate),
             notes: fi.notes ?? null,
             rowIds: ids(fi.rowIds), plantIds: ids(fi.plantIds),
-            treatmentRecommendedOperationId: fi.treatmentRecommendedOperationId ?? null,
+            treatmentRecommendedOperationId: pick(made.recOps, fi.treatmentRecommendedOperationId),
             performedByUserId: userOrNull(fi.performedByUserId),
             observations: {
               create: (fi.observations ?? []).map((ob: any) => ({
@@ -394,12 +439,15 @@ export async function restoreFromBackup(userId: string, data: any): Promise<{ fa
       }
 
       // Team memberships (only for teammates whose accounts still exist,
-      // never the owner). Invite codes are NOT restored — those are secrets.
+      // never the owner, and only with a real membership role). Invite
+      // codes are NOT restored — those are secrets.
       for (const m of farm.members ?? []) {
         const memberId = userOrNull(m.userId)
         if (!memberId || memberId === userId) continue
+        const role = m.role ?? 'operator'
+        if (!MEMBER_ROLES.includes(role)) continue
         await tx.farmMember.create({
-          data: { farmId: farm.id, userId: memberId, role: m.role ?? 'operator' },
+          data: { farmId: farm.id, userId: memberId, role },
         })
       }
     }
@@ -413,10 +461,12 @@ export async function restoreFromBackup(userId: string, data: any): Promise<{ fa
     )
     const seenDefaultScopes = new Set<string>()
     for (const d of data.recipeDefaults ?? []) {
-      // The recipe must exist (restored above, or already in this DB —
-      // e.g. a system recipe); its cropTypeId is authoritative.
+      // The recipe must be the user's own (restored above) or a system
+      // recipe already in this DB — never another author's private one
+      // (same rule as PUT /recipes/defaults); its cropTypeId is authoritative.
       const recipe = await tx.recipe.findFirst({
-        where: { id: String(d.recipeId) }, select: { cropTypeId: true },
+        where: { id: String(d.recipeId), OR: [{ authorUserId: null }, { authorUserId: userId }] },
+        select: { cropTypeId: true },
       })
       if (!recipe) continue
       if (d.farmId && !restoredFarmIds.has(String(d.farmId))) continue
