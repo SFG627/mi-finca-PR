@@ -9,6 +9,7 @@ import {
 import { calculateAreaAcres, formatFarm } from '../lib/farmUtils'
 import { requireFarmRole } from '../lib/farmAccess'
 import { hashInviteCode } from '../lib/farmInvites'
+import { todayInAppTz } from '../lib/today'
 
 const router = Router()
 
@@ -348,8 +349,7 @@ router.get('/:id/summary', async (req: Request, res: Response, next: NextFunctio
     // A recommended operation belongs to this farm through either its
     // planting event's field or its livestock unit. Overdue = past its
     // recommended date; dueSoon = inside the next 14 days (SDD §4.6).
-    const today = new Date()
-    today.setUTCHours(0, 0, 0, 0) // recommendedDate is a date-only column anchored at UTC midnight
+    const today = todayInAppTz() // recommendedDate is a date-only column anchored at UTC midnight
     const horizon = new Date(today)
     horizon.setUTCDate(horizon.getUTCDate() + 14)
 

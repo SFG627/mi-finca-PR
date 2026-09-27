@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { Bug } from 'lucide-react'
 import type { FieldRow, PlantInstance } from '@/features/field/types'
+import { todayISO } from '@/features/field/types'
 import {
   HarvestSelector, plantSetToSelection, selectionToPlantSet,
 } from '@/features/field/components/operationsView'
@@ -42,7 +43,7 @@ export default function FindingModal({
   const isPhone = useIsPhone()
   // The farm-switch guard warns before discarding this form's input.
   useMarkUnsavedWork()
-  const today = new Date().toISOString().split('T')[0]
+  const today = todayISO()
   const createFinding = useCreateFinding(farmId)
   const addObservation = useAddObservation(farmId)
 

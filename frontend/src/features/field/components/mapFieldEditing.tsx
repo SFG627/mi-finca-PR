@@ -274,7 +274,7 @@ export function useMapFieldEditing(
 
   async function flushRemovalLogs(fieldId: string) {
     if (removalLogs.length === 0) return
-    const today = new Date().toISOString().split('T')[0]
+    const today = todayISO()
     await Promise.all(removalLogs.map(log => {
       const cropName = getCropById(log.cropTypeId)?.nameEs ?? log.cropTypeId
       const reasonLabel = i18n.t(`editor:removal.reasons.${log.reason}`).toLowerCase()

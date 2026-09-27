@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { Bug, Plus, X, TrendingDown, TrendingUp, MoveRight } from 'lucide-react'
 import type { FieldRow, PlantInstance, PlantingEvent } from '@/features/field/types'
+import { todayISO } from '@/features/field/types'
 import { toast } from '@/store/useToastStore'
 import {
   useFindings, useUpdateFinding, useDeleteFinding, useCreateTreatmentOp,
@@ -82,7 +83,7 @@ export default function FindingsSection({
       toast.error(t('list.toastNoPlantings'))
       return
     }
-    setLaborDate(new Date().toISOString().split('T')[0])
+    setLaborDate(todayISO())
     setLaborFor(f)
   }
 

@@ -118,6 +118,14 @@ export function randomFieldColor(): string {
   return FIELD_COLORS[Math.floor(Math.random() * FIELD_COLORS.length)]
 }
 
-export function todayISO(): string {
-  return new Date().toISOString().split('T')[0]
+// Calendar dates follow the farmer's device clock, never UTC: Puerto Rico
+// is UTC−4, so from 8 PM on toISOString() already answers with tomorrow.
+export function toLocalISODate(date: Date): string {
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${date.getFullYear()}-${month}-${day}`
+}
+
+export function todayISO(now: Date = new Date()): string {
+  return toLocalISODate(now)
 }

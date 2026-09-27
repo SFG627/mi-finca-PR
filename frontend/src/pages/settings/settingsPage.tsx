@@ -8,6 +8,7 @@ import { useAuthStore } from '@/store/useAuthStore'
 import { useSettingsStore } from '@/store/useSettingsStore'
 import { useConfirm } from '@/components/shared/confirmDialog'
 import { toast } from '@/store/useToastStore'
+import { todayISO } from '@/features/field/types'
 
 // ──────────────────────────────────────────────────────────────────────────
 // Settings — backup/restore/clear are SERVER-side (v2): export downloads
@@ -28,7 +29,7 @@ export default function SettingsPage() {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = filename ?? `mi-finca-respaldo-${new Date().toISOString().slice(0, 10)}.json`
+      a.download = filename ?? `mi-finca-respaldo-${todayISO()}.json`
       a.click()
       URL.revokeObjectURL(url)
       toast.success(t('settings.toasts.backupDownloaded'))

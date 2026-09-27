@@ -4,6 +4,7 @@ import { requireAuth } from '../middleware/auth'
 import { Errors } from '../lib/errors'
 import { requireFarmRole } from '../lib/farmAccess'
 import { requireRevenue, requireQuantity, parseBody } from '../lib/validate'
+import { todayInAppTz } from '../lib/today'
 import { enforceContract } from '../contracts/enforce'
 import {
   recommendedOperationListItemSchema, completeRecOpRequestSchema, partialLogRequestSchema,
@@ -55,11 +56,10 @@ function serializeRecOp(op: any) {
 }
 
 // Today at UTC midnight — recommendedDate is a @db.Date column (stored at
-// midnight UTC), so comparisons must use the same anchor.
+// midnight UTC), so comparisons must use the same anchor. "Today" is the
+// farm's calendar date (lib/today.ts), not the UTC one.
 function todayUtc(): Date {
-  const d = new Date()
-  d.setUTCHours(0, 0, 0, 0)
-  return d
+  return todayInAppTz()
 }
 
 // The open status a recommendation should carry given its date: past-due

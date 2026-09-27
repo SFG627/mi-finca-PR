@@ -4,6 +4,7 @@ import { requireAuth } from '../middleware/auth'
 import { Errors } from '../lib/errors'
 import { requireFields, requireValidId, requireRevenue, requireQuantity, parseBody } from '../lib/validate'
 import { requireFarmRole } from '../lib/farmAccess'
+import { todayInAppTz } from '../lib/today'
 import { enforceContract } from '../contracts/enforce'
 import {
   operationResponseSchema, createOperationRequestSchema, updateOperationRequestSchema,
@@ -448,8 +449,7 @@ router.delete('/:id', async (req: Request, res: Response, next: NextFunction) =>
       // Un-complete any recommendation that pointed at this log entry. The
       // status goes back to due (not just pending) when its date has passed,
       // so the calendar immediately shows it as outstanding again.
-      const today = new Date()
-      today.setUTCHours(0, 0, 0, 0)
+      const today = todayInAppTz()
       const linked = await tx.recommendedOperation.findMany({
         where: { completedOperationId: id, ...recOpsOfFarm(farmId) },
         select: { id: true, recommendedDate: true },

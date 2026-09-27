@@ -10,6 +10,7 @@ import LivestockFormModal from './livestockFormModal'
 import LivestockUnitRow from './livestockUnitRow'
 import { toast } from '@/store/useToastStore'
 import { downloadCsv } from '@/lib/csv'
+import { todayISO } from '@/features/field/types'
 import { getAnimalById } from '../data/animalLibrary'
 import { localName } from '@/i18n'
 
@@ -46,7 +47,7 @@ export default function LivestockSection() {
   // exports every herd.
   function exportUnitsCsv() {
     downloadCsv(
-      `mi-finca-animales-${new Date().toISOString().slice(0, 10)}.csv`,
+      `mi-finca-animales-${todayISO()}.csv`,
       [
         t('livestock.exportCols.type'), t('livestock.exportCols.name'),
         t('livestock.exportCols.count'), t('livestock.exportCols.farm'),
