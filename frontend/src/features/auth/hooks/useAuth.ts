@@ -99,6 +99,24 @@ export function useRegister() {
   })
 }
 
+// ── Request access ────────────────────────────────────────────────────
+// For whoever has no access code while the signup gate is up. The server
+// stores the request, tells the app's owner, and answers every request
+// the same way — whether or not it already knew the address.
+export function useRequestAccess() {
+  return useMutation({
+    mutationFn: async (data: {
+      fullName: string
+      email: string
+      location?: string
+      message?: string
+      language: 'es' | 'en'
+    }) => {
+      return api.post<{ received: boolean }>('/api/v1/auth/access-requests', data)
+    },
+  })
+}
+
 // ── Demo mode ─────────────────────────────────────────────────────────
 // "Probar la demo": the server creates an ephemeral account seeded with a
 // sample farm and signs the visitor straight in.
