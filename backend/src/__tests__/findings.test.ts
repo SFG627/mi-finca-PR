@@ -109,6 +109,11 @@ describe('POST /findings/:id/create-operation', () => {
       data: { fieldId: field.id, cropTypeId: 'platano', plantingDate: new Date('2026-06-01'), plantCount: 5 },
     })
 
+    // A date safely in the future whenever the suite runs — a hardcoded
+    // calendar date turns this test red the day it passes.
+    const future = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+      .toISOString().slice(0, 10)
+
     const res = await request
       .post(`/api/v1/farms/${farm.id}/findings/${finding.body.data.id}/create-operation`)
       .set('Authorization', `Bearer ${token}`)
@@ -116,11 +121,11 @@ describe('POST /findings/:id/create-operation', () => {
         plantingEventId: event.id,
         labelEs: 'Tratamiento — pulgones',
         type: 'spray',
-        recommendedDate: '2026-09-15',
+        recommendedDate: future,
       })
 
     expect(res.status).toBe(201)
-    expect(res.body.data.recommendedOperation.recommendedDate).toBe('2026-09-15')
+    expect(res.body.data.recommendedOperation.recommendedDate).toBe(future)
     expect(res.body.data.recommendedOperation.status).toBe('pending')
   })
 })

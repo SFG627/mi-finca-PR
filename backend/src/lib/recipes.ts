@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client'
 import { prisma } from './prisma'
 import { enforceContract } from '../contracts/enforce'
 import {
@@ -102,11 +103,14 @@ export async function resolveFarmRecipes(farmId: string, ownerUserId: string) {
 
 // Planting payloads carry client-supplied version ids — keep only ones
 // that exist so a stale/foreign id degrades to "no reference" instead of
-// a foreign-key 500.
-export async function knownRecipeVersionIds(ids: Array<string | null | undefined>): Promise<Set<string>> {
+// a foreign-key 500. `db` lets a save run this on its own transaction.
+export async function knownRecipeVersionIds(
+  ids: Array<string | null | undefined>,
+  db: Prisma.TransactionClient = prisma
+): Promise<Set<string>> {
   const wanted = [...new Set(ids.filter((v): v is string => !!v))]
   if (wanted.length === 0) return new Set()
-  const rows = await prisma.recipeVersion.findMany({
+  const rows = await db.recipeVersion.findMany({
     where: { id: { in: wanted } },
     select: { id: true },
   })
@@ -114,10 +118,13 @@ export async function knownRecipeVersionIds(ids: Array<string | null | undefined
 }
 
 // R1: the first planting that stamps from a version freezes it.
-export async function markVersionsReferenced(ids: Array<string | null | undefined>) {
+export async function markVersionsReferenced(
+  ids: Array<string | null | undefined>,
+  db: Prisma.TransactionClient = prisma
+) {
   const wanted = [...new Set(ids.filter((v): v is string => !!v))]
   if (wanted.length === 0) return
-  await prisma.recipeVersion.updateMany({
+  await db.recipeVersion.updateMany({
     where: { id: { in: wanted }, referencedAt: null },
     data: { referencedAt: new Date() },
   })
