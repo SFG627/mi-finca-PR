@@ -1,7 +1,7 @@
-import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { GraduationCap } from 'lucide-react'
 import { useAuthStore } from '@/store/useAuthStore'
+import { useLeaveDemo } from '@/features/auth/hooks/useAuth'
 
 // Slim persistent bar under the top nav while exploring with a demo
 // account: says what this is, relaunches the tour, and offers the real
@@ -9,8 +9,7 @@ import { useAuthStore } from '@/store/useAuthStore'
 export default function DemoBanner() {
   const { t } = useTranslation('pages')
   const user = useAuthStore(s => s.user)
-  const clearAuth = useAuthStore(s => s.clearAuth)
-  const navigate = useNavigate()
+  const leaveDemo = useLeaveDemo()
 
   if (!user?.isDemo) return null
 
@@ -26,7 +25,7 @@ export default function DemoBanner() {
         {t('demoBanner.tour')}
       </button>
       <button
-        onClick={() => { clearAuth(); navigate('/register') }}
+        onClick={() => leaveDemo('/register')}
         className="shrink-0 px-2.5 py-1 bg-[#2d4a1e] text-[#d4e8b0] rounded-md font-medium hover:bg-[#3d6128] transition-colors"
       >
         {t('demoBanner.register')}
